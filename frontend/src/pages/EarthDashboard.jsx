@@ -1,10 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { MapPin, ChevronDown, Send, Globe, Users, TrendingUp, Map, MessageSquare, Target, Sparkles, X, ArrowRight } from 'lucide-react'
-import { Link } from 'react-router-dom'
-// pointInPolygon is no longer needed, so it can be removed.
-// import pointInPolygon from 'point-in-polygon'; 
-
-// --- (The RoleSelector and OnboardingBanner components remain the same) ---
+import { MapPin, ChevronDown, Send, Globe, Users, TrendingUp, Map, MessageSquare, Target, Sparkles, X, ArrowRight, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
+import GeospatialAPI from '../services/geospatialAPI' // Import the API service
 
 const COMMON_QUESTIONS = [
     "What are the current air quality levels in this area?",
@@ -101,6 +98,76 @@ const OnboardingBanner = ({ role, onDismiss }) => {
     )
 }
 
+// New Results Display Component
+const ResultsDisplay = ({ results, isLoading, error, onClose }) => {
+    if (!results && !isLoading && !error) return null;
+
+    return (
+        <div className="rounded-2xl border border-white/10 bg-gray-900/60 p-4 mt-4">
+            <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4 text-cyan-400" />
+                    <span className="font-semibold">Analysis Results</span>
+                </div>
+                <button
+                    onClick={onClose}
+                    className="text-gray-400 hover:text-white transition-colors"
+                >
+                    <X className="w-4 h-4" />
+                </button>
+            </div>
+
+            {isLoading && (
+                <div className="flex items-center justify-center py-8">
+                    <div className="flex items-center gap-3 text-cyan-400">
+                        <Loader2 className="w-6 h-6 animate-spin" />
+                        <span>Analyzing your query...</span>
+                    </div>
+                </div>
+            )}
+
+            {error && (
+                <div className="flex items-center gap-3 p-4 bg-red-900/20 border border-red-500/30 rounded-lg text-red-300">
+                    <AlertCircle className="w-5 h-5" />
+                    <div>
+                        <div className="font-semibold">Analysis Failed</div>
+                        <div className="text-sm text-red-400">{error}</div>
+                    </div>
+                </div>
+            )}
+
+            {results && results.success && (
+                <div className="space-y-4">
+                    <div className="flex items-center gap-2 text-green-400">
+                        <CheckCircle className="w-4 h-4" />
+                        <span className="text-sm">{results.message}</span>
+                    </div>
+
+                    {/* Query Summary */}
+                    <div className="p-3 bg-gray-800/50 rounded-lg">
+                        <div className="text-sm text-gray-300 mb-2">Processed Query:</div>
+                        <div className="text-sm text-gray-400 bg-gray-800 p-2 rounded">
+                            {results.query_processed}
+                        </div>
+                    </div>
+
+                    {/* Results Data */}
+                    <div className="p-3 bg-gray-800/50 rounded-lg">
+                        <div className="text-sm text-gray-300 mb-2">Analysis Results:</div>
+                        <div className="max-h-96 overflow-y-auto">
+                            <pre className="text-xs text-gray-300 whitespace-pre-wrap">
+                                {typeof results.data === 'string' 
+                                    ? results.data 
+                                    : JSON.stringify(results.data, null, 2)
+                                }
+                            </pre>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    )
+}
 
 export default function PuneMapDashboard() {
     const mapRef = useRef(null)
@@ -112,13 +179,19 @@ export default function PuneMapDashboard() {
     const [showWardDropdown, setShowWardDropdown] = useState(false)
     const [showOnboarding, setShowOnboarding] = useState(false)
     const [puneWards, setPuneWards] = useState([]);
+    const navigate = useNavigate();
+
+
+    // New states for API integration
+    const [apiResults, setApiResults] = useState(null)
+    const [isAnalyzing, setIsAnalyzing] = useState(false)
+    const [apiError, setApiError] = useState(null)
 
     // Fetch ward data for the dropdown
     useEffect(() => {
         fetch('/wards.json')
             .then(response => response.json())
             .then(data => {
-                // Access the nested 'wards' array from your JSON structure
                 if (data && Array.isArray(data.wards)) {
                     setPuneWards(data.wards);
                 } else {
@@ -128,12 +201,10 @@ export default function PuneMapDashboard() {
             .catch(error => console.error('Error fetching ward data:', error));
     }, []);
 
-
     // Initialize Leaflet map
     useEffect(() => {
         if (!selectedRole || !mapElRef.current) return
         if (!window.L) {
-            // Load Leaflet dynamically if not available
             const script = document.createElement('script')
             script.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js'
             script.onload = initializeMap
@@ -146,14 +217,12 @@ export default function PuneMapDashboard() {
             return
         }
         initializeMap()
-    }, [selectedRole]) // Removed puneWards from dependency array as it's not needed for map initialization anymore
+    }, [selectedRole])
 
     const initializeMap = () => {
-        // We only initialize the map once, and it no longer depends on ward data being loaded.
         if (!window.L || !mapElRef.current || mapRef.current) return
 
         const L = window.L
-        // Center map on Pune
         const map = L.map(mapElRef.current, {
             center: [18.5204, 73.8567], // Pune coordinates
             zoom: 12
@@ -165,15 +234,11 @@ export default function PuneMapDashboard() {
             attribution: '&copy; OpenStreetMap contributors'
         }).addTo(map)
 
-        // **REMOVED**: The code block that drew ward polygons is now gone.
-
         // Handle map clicks to get coordinates
         let currentMarker = null
         map.on('click', (e) => {
             const { lat, lng } = e.latlng
             setClickedCoordinates({ lat: lat.toFixed(6), lng: lng.toFixed(6) })
-
-            // When user clicks the map, clear the ward dropdown selection
             setSelectedWard('');
 
             // Remove previous marker
@@ -185,8 +250,6 @@ export default function PuneMapDashboard() {
             currentMarker = L.marker([lat, lng]).addTo(map)
                 .bindPopup(`Lat: ${lat.toFixed(6)}<br>Lng: ${lng.toFixed(6)}`)
                 .openPopup();
-
-            // **REMOVED**: The logic to find which ward was clicked is now gone.
         })
     }
 
@@ -199,26 +262,19 @@ export default function PuneMapDashboard() {
         setShowOnboarding(false)
     }
 
-    // This function runs when a user selects a ward from the dropdown
     const handleWardSelect = (wardName) => {
         setSelectedWard(wardName)
         setShowWardDropdown(false)
         
-        // Find the selected ward's data
         const ward = puneWards.find(w => w.ward_name === wardName)
         if (ward && mapRef.current && window.L) {
-            // Calculate the center of the ward's coordinates
             const center = ward.approximate_coordinates.reduce(
                 (acc, coord) => [acc[0] + coord[0], acc[1] + coord[1]], 
                 [0, 0]
             ).map(sum => sum / ward.approximate_coordinates.length)
             
-            // Pan the map to the ward's center
-            // Note: Leaflet expects [latitude, longitude] but your JSON is [longitude, latitude]
             const mapCenter = [center[1], center[0]]
             mapRef.current.setView(mapCenter, 14)
-
-            // Update the selected coordinates display
             setClickedCoordinates({ lat: mapCenter[0].toFixed(6), lng: mapCenter[1].toFixed(6) })
         }
     }
@@ -227,18 +283,61 @@ export default function PuneMapDashboard() {
         setUserQuery(question)
     }
 
+    // Updated handleSendQuery function with API integration
     const handleSendQuery = async () => {
         if (!userQuery.trim()) return
 
-        console.log('Sending query:', {
-            role: selectedRole,
-            coordinates: clickedCoordinates,
-            ward: selectedWard,
-            query: userQuery
-        })
-        
-        alert(`Query sent: ${userQuery}`)
+        // Clear previous results and errors
+        setApiResults(null)
+        setApiError(null)
+        setIsAnalyzing(true)
+
+        try {
+            // Prepare coordinates array
+            const coordinates = clickedCoordinates ? [clickedCoordinates] : []
+            
+            // Prepare additional parameters
+            const additionalParams = {
+                role: selectedRole,
+                ward: selectedWard,
+                timestamp: new Date().toISOString(),
+                source: 'pune_environmental_dashboard'
+            }
+
+            console.log('Sending query to API:', {
+                query: userQuery,
+                coordinates,
+                additionalParams
+            })
+
+            // Call the API
+            const response = await GeospatialAPI.analyzeGeospatialData(
+                userQuery, 
+                coordinates, 
+                additionalParams
+            )
+
+            console.log('API Response:', response)
+            navigate('/representation', { state: { responseData: response } });
+
+
+
+            setApiResults(response)
+
+        } catch (error) {
+            console.error('API call failed:', error)
+            setApiError(error.message || 'An error occurred while analyzing your query')
+        } finally {
+            setIsAnalyzing(false)
+        }
+
+        // Clear the input
         setUserQuery('')
+    }
+
+    const handleCloseResults = () => {
+        setApiResults(null)
+        setApiError(null)
     }
 
     return (
@@ -353,20 +452,26 @@ export default function PuneMapDashboard() {
                         
                         <div className="flex gap-3 mb-4">
                             <textarea
-                                type="text"
                                 value={userQuery}
                                 onChange={(e) => setUserQuery(e.target.value)}
                                 placeholder="Enter your environmental query..."
                                 className="flex-1 px-3 py-2 bg-gray-800 border border-white/10 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500"
-                                onKeyPress={(e) => e.key === 'Enter' && handleSendQuery()}
+                                onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleSendQuery()}
+                                disabled={isAnalyzing}
                             />
                             <button
                                 onClick={handleSendQuery}
-                                disabled={!userQuery.trim()}
-                                className="px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 text-sm"
+                                disabled={!userQuery.trim() || isAnalyzing}
+                                className="px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 text-sm min-w-[80px] justify-center"
                             >
-                                <Send className="w-4 h-4" />
-                                Send
+                                {isAnalyzing ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <>
+                                        <Send className="w-4 h-4" />
+                                        Send
+                                    </>
+                                )}
                             </button>
                         </div>
                         
@@ -375,18 +480,27 @@ export default function PuneMapDashboard() {
                             <div className="text-sm text-gray-300 mb-3">Commonly Asked Questions</div>
                             <div className="grid md:grid-cols-2 gap-3">
                                 {COMMON_QUESTIONS.map((question, index) => (
-                                    <Link
+                                    <button
                                         key={index}
                                         onClick={() => handleQuestionClick(question)}
                                         className="p-3 text-left text-sm text-gray-300 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 transition-all"
+                                        disabled={isAnalyzing}
                                     >
                                         {question}
-                                    </Link>
+                                    </button>
                                 ))}
                             </div>
                         </div>
                     </div>
                 )}
+
+                {/* Results Section */}
+                <ResultsDisplay 
+                    results={apiResults}
+                    isLoading={isAnalyzing}
+                    error={apiError}
+                    onClose={handleCloseResults}
+                />
             </div>
         </div>
     )
